@@ -2,6 +2,8 @@ from urllib.parse import urlsplit, urljoin
 from bs4 import BeautifulSoup, Tag
 from typing import TypedDict
 import requests
+from asyncio import Lock, Semaphore
+import aiohttp
 
 class PageData(TypedDict):
     url: str
@@ -9,6 +11,92 @@ class PageData(TypedDict):
     first_paragraph: str
     outgoing_links: list[str]
     image_urls: list[str]
+
+class AsyncCrawler():
+    def __init__(self, base_url: str, max_concurrency: int = 3):
+        self.base_url = base_url
+        self.base_domain = normalize_url(base_url)
+        self.page_data = None
+        self.lock = Lock()
+        self.max_concurrency = max_concurrency
+        self.semaphore = Semaphore(max_concurrency)
+        self.session = aiohttp.ClientSession()
+        
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession()
+        return self
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session is not None:
+            await self.session.close()
+
+    async def add_page_visit(self, normalized_url: str) -> bool:
+
+        async with self.lock:
+            if normalized_url in self.page_data:
+                return False # Page already visited 
+            else:
+                return True
+
+    async def get_html(self, url: str) -> str | None:
+
+        if self.session is None:
+            return None
+
+        try:
+            async with self.session.get(
+                url, headers={"User-Agent": "BootCrawler/1.0"}
+            ) as response:
+                if response.status > 399:
+                    print(f"Error: HTTP {response.status} for {url}")
+                    return None
+
+                content_type = response.headers.get("content-type", "")
+                if "text/html" not in content_type:
+                    print(f"Error: Non-HTML content {content_type} for {url}")
+                    return None
+
+                return await response.text()
+        except Exception as e:
+            print(f"Error fetching {url}: {e}")
+            return None 
+
+    async def crawl_page(self, base_url: str, current_url: str = None, page_data: dict[str:PageData] = None) -> dict[str:PageData] | None:
+        
+        if current_url is None:
+            current_url = base_url
+        if page_data is None:
+            page_data = {}
+
+        print(current_url)
+
+        if not self.add_page_visit(current_url):
+            return page_data
+            
+        if urlsplit(current_url).netloc != urlsplit(base_url).netloc: # Make sure we are on the same domain
+            return page_data
+ 
+        async with self.semaphore:
+
+            norm_current_url = normalize_url(current_url)
+            
+            html = get_html(current_url)
+            print(f'Getting HTML for {current_url}...')
+
+            if html is None:
+                return page_data
+
+            async with self.lock:
+                page_data[f'{norm_current_url}'] = extract_page_data(html, current_url)
+
+            for url in page_data[f'{norm_current_url}']['outgoing_links']:
+                crawl_page(base_url = base_url, current_url = url, page_data = page_data)
+
+            return page_data
+
+    async def crawl(self):
+
+        return await self.crawl_page(self.base_url)
+
 
 
 def get_html(url):
@@ -105,4 +193,12 @@ def crawl_page(base_url: str, current_url: str = None, page_data: dict[str:PageD
         crawl_page(base_url = base_url, current_url = url, page_data = page_data)
 
     return page_data
+
+async def crawl_site_async(base_url: str) -> PageData:
+
+    crawler = AsyncCrawler(base_url, 10)
+
+    
+    async with crawler as c:
+       return await c.crawl()
 
