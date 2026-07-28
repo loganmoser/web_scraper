@@ -1,5 +1,3 @@
-# web_scraper
-
 A small asynchronous web crawler. Point it at a URL, tell it how many pages to visit and how many requests to run at once, and it walks the site's internal links, pulls basic info off each page (heading, first paragraph, links, images), and writes it all to `report.json`.
 
 This was built as part of the boot.dev course, so it's intentionally simple — a good project to read end-to-end if you're learning how async crawling works.
